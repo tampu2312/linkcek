@@ -64,6 +64,7 @@
         .status-dot.invalid { background: #555; }
         @keyframes blink { 0%,100%{opacity:1}50%{opacity:0.3} }
         @keyframes fadeUp { from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)} }
+        @keyframes spin { to { transform: rotate(360deg); } }
         
         .btn-primary {
             background: linear-gradient(135deg, var(--accent-dim), var(--accent));
@@ -79,6 +80,7 @@
             background: rgba(255,255,255,0.05); color: var(--text-primary); border: 1px solid var(--border);
             padding: 8px 16px; border-radius: 8px; cursor: pointer; transition: all 0.2s;
             font-family: 'Space Grotesk', sans-serif; font-size: 0.8rem;
+            display: inline-flex; align-items: center; justify-content: center;
         }
         .btn-ghost:hover { border-color: var(--accent); color: var(--accent); background: rgba(0,229,160,0.05); }
         
@@ -106,9 +108,7 @@
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
         
-        .card-header {
-            cursor: pointer; user-select: none;
-        }
+        .card-header { cursor: pointer; user-select: none; }
         .toggle-icon { transition: transform 0.3s ease; }
         .card-header.collapsed .toggle-icon { transform: rotate(-90deg); }
         
@@ -123,7 +123,7 @@
         .toast-info { background: rgba(77,166,255,0.15); border: 1px solid rgba(77,166,255,0.3); color: var(--info); }
         
         .spinner { width: 14px; height: 14px; border: 2px solid transparent; border-top-color: var(--bg-deep); border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; }
-        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinner-green { border-top-color: var(--accent); }
         
         .modal-overlay {
             position: fixed; inset: 0; background: rgba(4,8,16,0.85);
@@ -184,7 +184,7 @@
                     <label style="font-size:0.8rem;color:var(--text-secondary);display:block;margin-bottom:8px">GID (Sheet Tab)</label>
                     <input id="inputGid" class="search-input" style="padding-left:16px" value="1803708013" placeholder="Masukkan GID">
                 </div>
-                <button class="btn-primary" style="width:100%;margin-bottom:16px" onclick="fetchSheetData()">
+                <button class="btn-primary" style="width:100%;margin-bottom:16px" onclick="fetchSheetData(false)">
                     <i class="fas fa-sync-alt" style="margin-right:8px"></i>Muat Data
                 </button>
             </div>
@@ -211,6 +211,10 @@
             </div>
         </div>
         <div style="display:flex;align-items:center;gap:12px">
+            <!-- Tombol Refresh Manual -->
+            <button class="btn-ghost" onclick="fetchSheetData(false)" title="Muat Ulang Data dari Sheets">
+                <i class="fas fa-sync-alt" id="refreshIcon"></i>
+            </button>
             <button class="btn-ghost" onclick="openModal('setupModal')"><i class="fas fa-cog" style="margin-right:6px"></i>Pengaturan</button>
             <button class="btn-primary" onclick="checkAllLinks()" id="btnCheck">
                 <i class="fas fa-bolt" style="margin-right:6px"></i>Cek Semua Link
@@ -357,21 +361,27 @@ function processData(rows) {
 }
 
 // ==================== FETCH DATA ====================
-async function fetchSheetData() {
+async function fetchSheetData(isAutoUpdate = true) {
     const sheetId = document.getElementById('inputSheetId').value.trim();
     const gid = document.getElementById('inputGid').value.trim();
     if (!sheetId || !gid) return showToast('ID wajib diisi', 'err');
     
+    // Animasi loading pada tombol refresh
+    const refreshIcon = document.getElementById('refreshIcon');
+    if(refreshIcon) refreshIcon.className = 'fas fa-sync-alt fa-spin';
+    
+    // Anti-cache: tambahkan timestamp unik di URL
+    const ts = Date.now();
     const urls = [
-        `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`,
-        `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`,
-        `https://docs.google.com/spreadsheets/d/${sheetId}/pub?gid=${gid}&single=true&output=csv`
+        `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}&_=${ts}`,
+        `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}&_=${ts}`,
+        `https://docs.google.com/spreadsheets/d/${sheetId}/pub?gid=${gid}&single=true&output=csv&_=${ts}`
     ];
 
     let success = false;
     for (const url of urls) {
         try {
-            const resp = await fetch(url);
+            const resp = await fetch(url, { cache: 'no-store' }); // Paksa tidak pakai cache
             if (!resp.ok) continue;
             const text = await resp.text();
             if (!text || text.length < 10) continue;
@@ -384,11 +394,15 @@ async function fetchSheetData() {
         } catch (e) { console.warn("Fetch error:", e); }
     }
 
+    if(refreshIcon) refreshIcon.className = 'fas fa-sync-alt';
+
     if (success) {
-        showToast(`Data berhasil dimuat: ${rawData.length} baris, ${headers.length} kolom`, 'ok');
-        closeModal('setupModal');
+        if (!isAutoUpdate) {
+            showToast(`Data berhasil diperbarui: ${rawData.length} baris`, 'ok');
+            closeModal('setupModal');
+        }
     } else {
-        showToast('Gagal mengambil data. Pastikan sheet berbagi "Anyone can view"', 'err');
+        if (!isAutoUpdate) showToast('Gagal mengambil data. Pastikan sheet berbagi "Anyone can view"', 'err');
     }
     renderAll();
 }
@@ -460,7 +474,6 @@ function renderCards() {
             const val = row[ci] || '';
             const url = normalizeURL(val);
             if (url) {
-                // PERBAIKAN: Jika kolom pertama (Domain) kosong, gunakan URL yang ada di dokumen sebagai nama
                 let displayName = row[0] && row[0].trim() !== '' ? row[0] : shortenURL(url);
                 
                 if (searchQuery && !displayName.toLowerCase().includes(searchQuery) && !url.toLowerCase().includes(searchQuery) && !val.toLowerCase().includes(searchQuery)) return;
@@ -491,12 +504,10 @@ function renderCards() {
                     <span class="status-dot ${st}"></span>
                     <span class="domain-text" style="flex:1" title="${escHTML(link.domain)}">${escHTML(link.domain)}</span>
                     
-                    <!-- Tombol Klik untuk Buka Link -->
                     <a href="${escAttr(link.url)}" target="_blank" rel="noopener noreferrer" class="btn-sm btn-blue" onclick="closeParentCard(this)" title="Buka Link">
                         <i class="fas fa-external-link-alt"></i> Buka Link
                     </a>
                     
-                    <!-- Tombol Salin -->
                     <button onclick="event.stopPropagation();copyLink('${escAttr(link.url)}')" class="btn-sm btn-gray" title="Salin Link">
                         <i class="fas fa-copy"></i>
                     </button>
@@ -528,9 +539,7 @@ function openAllCategory(ci, btnEl) {
         }
     });
     
-    // Tutup kartu setelah dibuka semua
     if (btnEl) closeParentCard(btnEl);
-    
     if (count > 0) showToast(`Mencoba membuka ${count} link...`, 'info');
 }
 
@@ -628,7 +637,15 @@ function importPastedData() {
 }
 
 // ==================== INIT ====================
-function init() { fetchSheetData(); }
+function init() { 
+    fetchSheetData(true); // Saat baru buka, langsung ambil data (tanpa notifikasi)
+    
+    // Set auto-refresh setiap 60 detik (1 menit)
+    setInterval(() => {
+        fetchSheetData(true);
+    }, 60000);
+}
+
 init();
 </script>
 </body>
